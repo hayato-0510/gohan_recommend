@@ -51,55 +51,72 @@ def create_user_profile(
 
     return profile
 
-def vectorize_restaurant(
-        restaurant,user_profile
-) -> np.array:
+def vectorize_user(user_profile, cuisine_weight=5) -> np.array:
     vector = []
+    
+    # 各料理ジャンルについて、ユーザーが好きかどうかを示す
+    for cuisine in cuisines:
+        vector.append(cuisine_weight if cuisine in user_profile['preferred_cuisines'] else 0)
+    
+    vector.append(user_profile['price_preference'] / 3000)
+    vector.append(user_profile['min_rating'] / 5)
+    vector.append(1 / user_profile['max_distance'])
+    
+    return np.array(vector)
 
-    if restaurant['cuisine'] in user_profile['preferred_cuisines']:
-        vector.append(1)
-    else:
-        vector.append(0)
-
-    # 予算が高いほど 1 に近づく
-    vector.append(restaurant['price_range'] / 3000)
-
-    # 評価が高いほど 1 に近づく
+def vectorize_restaurant(restaurant, user_profile, cuisine_weight=5) -> np.array:
+    vector = []
+    
+    for cuisine in cuisines:
+        vector.append(cuisine_weight if restaurant['cuisine'] == cuisine else 0)
+    
+    # 価格帯の近さを反映（差が小さいほど1に近づく）
+    vector.append(1 - abs(restaurant['price_range'] - user_profile['price_preference']) / 2000)
+    
+    # 評価を反映
     vector.append(restaurant['rating'] / 5)
-
-    # 距離が近いほど 1 に近づく
+    
+    # 距離の近さを反映（最大距離に対する比率、近いほど1に近づく）
     vector.append(1 - (restaurant['distance_km'] / user_profile['max_distance']))
-
+    
     return np.array(vector)
 
 def recommend_restaurants(
         restaurants: pd.DataFrame, 
         user_profile: dict, 
-        n_recommendations=5
+        n_recommendations=10
 ) -> pd.DataFrame:
+    # ユーザーのベクトルを作成
+    user_vector = vectorize_user(user_profile)
+    
     # レストランの特徴量ベクトルを作成
-    restaurant_vectors = np.array([vectorize_restaurant(row,user_profile) for _, row in restaurants.iterrows()])
-
-    # ユーザーの理想的な特徴量ベクトルを作成(全部 1 になる)
-    user_vector = np.ones_like(restaurant_vectors[0])
-
-    similarities = cosine_similarity([user_vector], restaurant_vectors)[0]
-
-    mask = (restaurants['rating'] >= user_profile['min_rating']) & (restaurants['distance_km'] <= user_profile['max_distance'])
+    restaurant_vectors = np.array([vectorize_restaurant(restaurant=row,user_profile=user_profile) for _, row in restaurants.iterrows()])
+    
+    # 正規化
+    scaler = StandardScaler()
+    scaled_vectors = scaler.fit_transform(np.vstack([user_vector, restaurant_vectors]))
+    
+    user_vector_scaled = scaled_vectors[0]
+    restaurant_vectors_scaled = scaled_vectors[1:]
+    
+    similarities = cosine_similarity([user_vector_scaled], restaurant_vectors_scaled)[0]
+    
+    # フィルタリング
+    mask = (restaurants['rating'] >= user_profile['min_rating'] * 0.9) & (restaurants['distance_km'] <= user_profile['max_distance'] * 1.1)
     filtered_restaurants = restaurants[mask]
     filtered_similarities = similarities[mask]
-
+    
     if filtered_restaurants.empty:
         return restaurants.sort_values('rating', ascending=False).head(n_recommendations)
-
+    
     top_indices = filtered_similarities.argsort()[-n_recommendations:][::-1]
     return filtered_restaurants.iloc[top_indices]
 
 if __name__ == '__main__':
-    restaurants = generate_restaurant_data(100)
+    restaurants = generate_restaurant_data(250)
     user_profile = create_user_profile()
     recommendations = recommend_restaurants(restaurants, user_profile)
-    print(recommendations[['name','cuisine','price_range','rating','distance_km']])
+    print(recommendations[['name','cuisine','price_range','rating','distance_km']].head(10))
 
     
 
